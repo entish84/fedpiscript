@@ -31,6 +31,10 @@
 #   - Joplin
 #   - Visual Studio Code
 #   - GitHub Desktop
+#   - GitHub CLI (gh)
+#   - lazygit & lazydocker (with configs)
+#   - mise Global Runtimes (dotnet@10, java@lts, node@latest)
+#   - GitHub SSH Key
 #   - Docker
 #   - Podman
 #   - Gemini CLI
@@ -268,6 +272,10 @@ color_echo "yellow" "Installing GitHub Desktop..."
 flatpak install -y flathub io.github.shiftey.Desktop
 color_echo "green" "GitHub Desktop installed successfully."
 
+color_echo "yellow" "Installing GitHub CLI (gh)..."
+dnf install -y gh
+color_echo "green" "GitHub CLI (gh) installed successfully."
+
 color_echo "yellow" "Installing Docker..."
 if rpm -q docker-ce >/dev/null 2>&1; then
     color_echo "yellow" "Docker is already installed - skipping installation."
@@ -287,6 +295,19 @@ color_echo "green" "Docker installed successfully."
 color_echo "yellow" "Installing Podman..."
 dnf install -y podman
 color_echo "green" "Podman installed successfully."
+
+color_echo "yellow" "Installing lazygit and lazydocker..."
+dnf install -y lazygit
+if ! dnf install -y lazydocker; then
+    LAZYDOCKER_VERSION=$(curl -s "https://api.github.com/repos/jesseduffield/lazydocker/releases/latest" | jq -r '.tag_name | ltrimstr("v")')
+    ARCH=$(uname -m)
+    [[ "$ARCH" == "x86_64" ]] && LD_ARCH="x86_64" || LD_ARCH="arm64"
+    curl -Lo /tmp/lazydocker.tar.gz "https://github.com/jesseduffield/lazydocker/releases/latest/download/lazydocker_${LAZYDOCKER_VERSION}_Linux_${LD_ARCH}.tar.gz"
+    tar -xzf /tmp/lazydocker.tar.gz -C /usr/local/bin lazydocker
+    chmod +x /usr/local/bin/lazydocker
+    rm -f /tmp/lazydocker.tar.gz
+fi
+color_echo "green" "lazygit and lazydocker installed successfully."
 
 # Install AI Coding Agents & Harnesses applications
 color_echo "yellow" "Installing Gemini CLI..."
@@ -444,6 +465,113 @@ else
     fi
 
     color_echo "green" "Dotfiles copied to $ACTUAL_HOME (backups in $BACKUP_DIR if replaced)."
+fi
+
+# Configure lazygit and lazydocker (if not already provided by dotfiles)
+color_echo "yellow" "Configuring lazygit and lazydocker..."
+LAZYGIT_CONFIG_DIR="$ACTUAL_HOME/.config/lazygit"
+LAZYDOCKER_CONFIG_DIR="$ACTUAL_HOME/.config/lazydocker"
+mkdir -p "$LAZYGIT_CONFIG_DIR" "$LAZYDOCKER_CONFIG_DIR"
+
+if [[ ! -f "$LAZYGIT_CONFIG_DIR/config.yml" ]]; then
+    cat << 'EOF' > "$LAZYGIT_CONFIG_DIR/config.yml"
+gui:
+  nerdFontsVersion: "3"
+  border: "rounded"
+  showFileTree: true
+  showRandomTip: false
+  showBottomLine: true
+  expandFocusedSidePanel: true
+  sidePanelWidth: 0.3333
+git:
+  autoFetch: true
+  autoRefresh: true
+  parseEmoji: true
+confirmOnQuit: false
+quitOnTopLevelReturn: false
+EOF
+    color_echo "green" "Created default lazygit config at $LAZYGIT_CONFIG_DIR/config.yml"
+else
+    color_echo "blue" "Existing lazygit config found - skipping."
+fi
+
+if [[ ! -f "$LAZYDOCKER_CONFIG_DIR/config.yml" ]]; then
+    cat << 'EOF' > "$LAZYDOCKER_CONFIG_DIR/config.yml"
+gui:
+  returnImmediately: true
+  wrapMainPanel: true
+  border: "rounded"
+  showAllContainers: true
+logs:
+  timestamps: false
+  since: "60m"
+  tail: "300"
+commandTemplates:
+  dockerCompose: "docker compose"
+EOF
+    color_echo "green" "Created default lazydocker config at $LAZYDOCKER_CONFIG_DIR/config.yml"
+else
+    color_echo "blue" "Existing lazydocker config found - skipping."
+fi
+chown -R "$ACTUAL_USER:$ACTUAL_USER" "$LAZYGIT_CONFIG_DIR" "$LAZYDOCKER_CONFIG_DIR"
+
+# Install global runtimes via mise (dotnet@10, java@lts, node@latest)
+color_echo "yellow" "Installing global runtimes via mise (dotnet@10, java@lts, node@latest)..."
+dnf install -y libicu
+if command -v mise &>/dev/null; then
+    sudo -u "$ACTUAL_USER" env HOME="$ACTUAL_HOME" mise use -g dotnet@10 java@lts node@latest
+    if [[ -f "$ACTUAL_HOME/.zshrc" ]] && ! grep -qF 'mise activate' "$ACTUAL_HOME/.zshrc"; then
+        echo 'eval "$(mise activate zsh)"' >> "$ACTUAL_HOME/.zshrc"
+    fi
+    if [[ -f "$ACTUAL_HOME/.bashrc" ]] && ! grep -qF 'mise activate' "$ACTUAL_HOME/.bashrc"; then
+        echo 'eval "$(mise activate bash)"' >> "$ACTUAL_HOME/.bashrc"
+    fi
+    chown -R "$ACTUAL_USER:$ACTUAL_USER" "$ACTUAL_HOME/.config/mise" "$ACTUAL_HOME/.local/share/mise" 2>/dev/null || true
+    color_echo "green" "mise global runtimes (dotnet@10, java@lts, node@latest) installed successfully."
+else
+    color_echo "red" "mise command not found - skipping global runtime installation."
+    FAILURES=$((FAILURES+1))
+fi
+
+# Generate SSH key for GitHub
+color_echo "yellow" "Configuring SSH key for GitHub..."
+SSH_DIR="$ACTUAL_HOME/.ssh"
+SSH_KEY="$SSH_DIR/id_ed25519"
+SSH_CONFIG="$SSH_DIR/config"
+mkdir -p "$SSH_DIR"
+chmod 700 "$SSH_DIR"
+chown "$ACTUAL_USER:$ACTUAL_USER" "$SSH_DIR"
+
+if [[ ! -f "$SSH_KEY" ]]; then
+    sudo -u "$ACTUAL_USER" ssh-keygen -t ed25519 -C "${ACTUAL_USER}@$(hostname)" -f "$SSH_KEY" -N ""
+    color_echo "green" "Generated new Ed25519 SSH key at $SSH_KEY"
+else
+    color_echo "blue" "SSH key already exists at $SSH_KEY - skipping generation."
+fi
+
+touch "$SSH_CONFIG"
+if ! grep -qE '^\s*Host\s+github\.com\b' "$SSH_CONFIG"; then
+    cat << 'EOF' >> "$SSH_CONFIG"
+
+Host github.com
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/id_ed25519
+    IdentitiesOnly yes
+EOF
+    color_echo "green" "Added github.com entry to $SSH_CONFIG"
+fi
+
+chmod 600 "$SSH_KEY" "$SSH_CONFIG" 2>/dev/null || true
+chmod 644 "${SSH_KEY}.pub" 2>/dev/null || true
+chown -R "$ACTUAL_USER:$ACTUAL_USER" "$SSH_DIR"
+if command -v restorecon &>/dev/null; then
+    restorecon -RF "$SSH_DIR" 2>/dev/null || true
+fi
+
+if [[ -f "${SSH_KEY}.pub" ]]; then
+    color_echo "blue" "Public SSH key for GitHub (add at https://github.com/settings/ssh/new or via 'gh ssh-key add'):"
+    cat "${SSH_KEY}.pub"
 fi
 
 # Before finishing, ensure we're in a safe directory
