@@ -4,6 +4,7 @@
 export LANG=en_US.UTF-8
 export EDITOR=micro
 export VISUAL=micro
+export ANDROID_HOME=$HOME/Android/Sdk
 
 # Smart word deletion (Alt+Backspace stops at '/', '.', '-', '_')
 WORDCHARS=${WORDCHARS//[\/.-_]}
@@ -13,6 +14,10 @@ path=(
     "$HOME/.local/bin"
     "$HOME/bin"
     "/usr/local/bin"
+    "$ANDROID_HOME/emulator"
+    "$ANDROID_HOME/platform-tools"
+    "$ANDROID_HOME/cmdline-tools/latest/bin"
+    "$HOME/Flutter/flutter/bin"
     $path
 )
 export PATH
